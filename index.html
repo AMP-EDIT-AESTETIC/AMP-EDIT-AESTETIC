@@ -281,11 +281,6 @@
     const ctx = canvas.getContext("2d");
     const previewWrapper = document.getElementById("previewWrapper");
 
-    // Offscreen Cache untuk Background agar tidak blur ulang tiap frame
-    const bgCacheCanvas = document.createElement("canvas");
-    const bgCacheCtx = bgCacheCanvas.getContext("2d");
-    let bgDirty = true;
-
     // Inputs
     const audioInput = document.getElementById("audioInput");
     const titleInput = document.getElementById("titleInput");
@@ -324,10 +319,6 @@
     let mediaRecorder = null;
     let recordedChunks = [];
 
-    function markBgDirty() {
-      bgDirty = true;
-    }
-
     function initAudioContext() {
       if (!audioCtx) {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -362,7 +353,6 @@
         canvas.height = Math.round((res * 16) / 9);
       }
       marqueeOffset = 0;
-      markBgDirty();
     }
 
     orientationSelect.addEventListener("change", updateCanvasDimensions);
@@ -387,7 +377,6 @@
         if (!hasBg) {
           bgImg = img;
           hasBg = true;
-          markBgDirty();
         }
       };
       img.src = URL.createObjectURL(file);
@@ -400,7 +389,6 @@
       img.onload = () => {
         bgImg = img;
         hasBg = true;
-        markBgDirty();
       };
       img.src = URL.createObjectURL(file);
     });
@@ -411,12 +399,10 @@
 
     blurInput.addEventListener("input", () => {
       blurVal.textContent = blurInput.value + "px";
-      markBgDirty();
     });
 
     brightInput.addEventListener("input", () => {
       brightVal.textContent = brightInput.value + "%";
-      markBgDirty();
     });
 
     btnPlayPause.addEventListener("click", () => {
@@ -480,35 +466,6 @@
       ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
     }
 
-    // Perbarui Cache Background hanya saat diperlukan
-    function rebuildBackgroundCache(W, H) {
-      bgCacheCanvas.width = W;
-      bgCacheCanvas.height = H;
-
-      bgCacheCtx.clearRect(0, 0, W, H);
-      bgCacheCtx.save();
-
-      const blurPx = parseFloat(blurInput.value) * (Math.min(W, H) / 720);
-      const brightnessPct = parseFloat(brightInput.value);
-      bgCacheCtx.filter = `blur(${blurPx}px) brightness(${brightnessPct}%)`;
-
-      if (hasBg) {
-        const pad = 40 * (Math.min(W, H) / 720);
-        drawImageCover(bgCacheCtx, bgImg, -pad, -pad, W + pad * 2, H + pad * 2);
-      } else {
-        const grad = bgCacheCtx.createLinearGradient(0, 0, W, H);
-        grad.addColorStop(0, "#4a443f");
-        grad.addColorStop(0.5, "#2b2a29");
-        grad.addColorStop(1, "#18181a");
-        bgCacheCtx.fillStyle = grad;
-        bgCacheCtx.fillRect(0, 0, W, H);
-      }
-
-      bgCacheCtx.restore();
-      bgDirty = false;
-    }
-
-    // Helper gambar teks marquee mulus
     function drawMarqueeText(ctx, text, x, y, maxW, dt, speedPxPerSec, alignWhenShort) {
       const textWidth = ctx.measureText(text).width;
       if (textWidth > maxW) {
@@ -586,7 +543,7 @@
       ctx.clip();
       ctx.fillStyle = "#ffffff";
       ctx.textBaseline = "alphabetic";
-      drawMarqueeText(ctx, titleText, titleAreaX, infoY, titleAreaW, dt, 64 * S, "left");
+      drawMarqueeText(ctx, titleText, titleAreaX, infoY, titleAreaW, dt, 56 * S, "left");
       ctx.restore();
 
       const artistY = infoY + 32 * S;
@@ -742,7 +699,7 @@
       ctx.clip();
       ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
       ctx.textBaseline = "alphabetic";
-      drawMarqueeText(ctx, titleText, rightX + 10 * S, titleY, titleBoxW, dt, 64 * S, "center");
+      drawMarqueeText(ctx, titleText, rightX + 10 * S, titleY, titleBoxW, dt, 56 * S, "center");
       ctx.restore();
 
       const artistY = titleY + 34 * S;
@@ -853,7 +810,6 @@
     // =========================================================================
     function renderFrame(timestamp) {
       if (!lastTimestamp) lastTimestamp = timestamp;
-      // Batasi dt maksimal 0.05 detik (50ms) agar gerakan teks tidak meloncat saat lag
       const dt = Math.min((timestamp - lastTimestamp) / 1000, 0.05);
       lastTimestamp = timestamp;
 
@@ -861,13 +817,28 @@
       const H = canvas.height;
       const isLandscape = orientationSelect.value === "landscape";
 
-      if (bgDirty || bgCacheCanvas.width !== W || bgCacheCanvas.height !== H) {
-        rebuildBackgroundCache(W, H);
-      }
-
       ctx.clearRect(0, 0, W, H);
-      ctx.drawImage(bgCacheCanvas, 0, 0);
 
+      // 1. LAYER BACKGROUND + BLUR & BRIGHTNESS
+      ctx.save();
+      const blurPx = parseFloat(blurInput.value) * (Math.min(W, H) / 720);
+      const brightnessPct = parseFloat(brightInput.value);
+      ctx.filter = `blur(${blurPx}px) brightness(${brightnessPct}%)`;
+
+      if (hasBg) {
+        const pad = 40 * (Math.min(W, H) / 720);
+        drawImageCover(ctx, bgImg, -pad, -pad, W + pad * 2, H + pad * 2);
+      } else {
+        const grad = ctx.createLinearGradient(0, 0, W, H);
+        grad.addColorStop(0, "#4a443f");
+        grad.addColorStop(0.5, "#2b2a29");
+        grad.addColorStop(1, "#18181a");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+      }
+      ctx.restore();
+
+      // 2. RENDER LAYOUT SESUAI ORIENTASI
       if (isLandscape) {
         renderLandscape(W, H, dt);
       } else {
