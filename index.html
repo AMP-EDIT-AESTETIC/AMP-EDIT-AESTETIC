@@ -197,7 +197,7 @@
   <!-- Tombol Aksi Utama -->
   <div class="quick-controls">
     <button id="btnPlayPause" class="btn btn-play">▶ Play Preview</button>
-    <button id="btnExport" class="btn btn-export">⬇ Export Video</button>
+    <button id="btnExport" class="btn btn-export">⬇ Export WEBM</button>
   </div>
 
   <div id="statusText" class="status-text"></div>
@@ -975,7 +975,7 @@
     }
 
     // =========================================================================
-    // 8. EXPORT / DOWNLOAD VIDEO KE GALERI PERANGKAT
+    // 8. EXPORT / DOWNLOAD WEBM KE GALERI PERANGKAT
     // =========================================================================
     btnExport.addEventListener("click", () => {
       if (isRecording) {
@@ -998,10 +998,7 @@
       }
       const combinedStream = new MediaStream(combinedTracks);
 
-      let mimeType = "video/webm;codecs=vp9,opus";
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = "video/webm;codecs=vp8,opus";
-      }
+      let mimeType = "video/webm;codecs=vp8,opus";
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = "video/webm";
       }
@@ -1010,7 +1007,7 @@
       try {
         mediaRecorder = new MediaRecorder(combinedStream, {
           mimeType: mimeType,
-          videoBitsPerSecond: 6000000
+          videoBitsPerSecond: 4500000
         });
       } catch (err) {
         mediaRecorder = new MediaRecorder(combinedStream);
@@ -1034,8 +1031,8 @@
         a.click();
         document.body.removeChild(a);
 
-        statusText.textContent = "Selesai! Video berhasil diunduh ke folder Download / Galeri.";
-        btnExport.textContent = "⬇ Export Video";
+        statusText.textContent = "Selesai! File .webm berhasil diunduh ke perangkat.";
+        btnExport.textContent = "⬇ Export WEBM";
         btnExport.classList.remove("recording");
         btnPlayPause.textContent = "▶ Play Preview";
       };
@@ -1050,7 +1047,7 @@
       btnExport.textContent = "⏹ Stop & Simpan";
       btnExport.classList.add("recording");
       btnPlayPause.textContent = "⏸ Pause";
-      statusText.textContent = `Merekam (${orientationSelect.value.toUpperCase()} ${resSelect.value}p ${fps}fps)...`;
+      statusText.textContent = `Merekam WEBM (${orientationSelect.value.toUpperCase()} ${resSelect.value}p ${fps}fps)...`;
     });
 
     function stopExport() {
