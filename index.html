@@ -281,6 +281,11 @@
     const ctx = canvas.getContext("2d");
     const previewWrapper = document.getElementById("previewWrapper");
 
+    // Offscreen Cache untuk Background agar tidak blur ulang tiap frame
+    const bgCacheCanvas = document.createElement("canvas");
+    const bgCacheCtx = bgCacheCanvas.getContext("2d");
+    let bgDirty = true;
+
     // Inputs
     const audioInput = document.getElementById("audioInput");
     const titleInput = document.getElementById("titleInput");
@@ -319,7 +324,10 @@
     let mediaRecorder = null;
     let recordedChunks = [];
 
-    // Setup Audio Context saat pertama kali berinteraksi
+    function markBgDirty() {
+      bgDirty = true;
+    }
+
     function initAudioContext() {
       if (!audioCtx) {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -340,7 +348,6 @@
       }
     }
 
-    // Update Ukuran & Orientasi Canvas (Portrait 9:16 atau Landscape 16:9)
     function updateCanvasDimensions() {
       const res = parseInt(resSelect.value, 10);
       const isLandscape = orientationSelect.value === "landscape";
@@ -355,12 +362,12 @@
         canvas.height = Math.round((res * 16) / 9);
       }
       marqueeOffset = 0;
+      markBgDirty();
     }
 
     orientationSelect.addEventListener("change", updateCanvasDimensions);
     resSelect.addEventListener("change", updateCanvasDimensions);
 
-    // Upload Audio
     audioInput.addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -370,7 +377,6 @@
       statusText.textContent = "Audio dimuat: " + file.name;
     });
 
-    // Upload Cover
     coverInput.addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -381,12 +387,12 @@
         if (!hasBg) {
           bgImg = img;
           hasBg = true;
+          markBgDirty();
         }
       };
       img.src = URL.createObjectURL(file);
     });
 
-    // Upload Background
     bgInput.addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -394,19 +400,25 @@
       img.onload = () => {
         bgImg = img;
         hasBg = true;
+        markBgDirty();
       };
       img.src = URL.createObjectURL(file);
     });
 
-    // Update Label Blur & Brightness
-    blurInput.addEventListener("input", () => {
-      blurVal.textContent = blurInput.value + "px";
-    });
-    brightInput.addEventListener("input", () => {
-      brightVal.textContent = brightInput.value + "%";
+    titleInput.addEventListener("input", () => {
+      marqueeOffset = 0;
     });
 
-    // Play / Pause Button
+    blurInput.addEventListener("input", () => {
+      blurVal.textContent = blurInput.value + "px";
+      markBgDirty();
+    });
+
+    brightInput.addEventListener("input", () => {
+      brightVal.textContent = brightInput.value + "%";
+      markBgDirty();
+    });
+
     btnPlayPause.addEventListener("click", () => {
       if (!audioPlayer.src) {
         statusText.textContent = "Silakan pilih file audio terlebih dahulu!";
@@ -414,6 +426,7 @@
       }
       initAudioContext();
       if (audioPlayer.paused) {
+        lastTimestamp = performance.now();
         audioPlayer.play();
         btnPlayPause.textContent = "⏸ Pause";
         statusText.textContent = "";
@@ -431,7 +444,6 @@
       }
     });
 
-    // Helper: Format Waktu
     function formatTime(sec) {
       if (!isFinite(sec) || sec < 0) sec = 0;
       const m = Math.floor(sec / 60);
@@ -439,7 +451,6 @@
       return `${m}:${s < 10 ? "0" : ""}${s}`;
     }
 
-    // Helper: Rounded Rectangle
     function roundRect(ctx, x, y, w, h, r) {
       ctx.beginPath();
       ctx.moveTo(x + r, y);
@@ -450,7 +461,6 @@
       ctx.closePath();
     }
 
-    // Helper: Draw Image Cover Fit
     function drawImageCover(ctx, img, x, y, w, h) {
       const imgRatio = img.width / img.height;
       const boxRatio = w / h;
@@ -470,13 +480,64 @@
       ctx.drawImage(img, offsetX, offsetY, drawW, drawH);
     }
 
+    // Perbarui Cache Background hanya saat diperlukan
+    function rebuildBackgroundCache(W, H) {
+      bgCacheCanvas.width = W;
+      bgCacheCanvas.height = H;
+
+      bgCacheCtx.clearRect(0, 0, W, H);
+      bgCacheCtx.save();
+
+      const blurPx = parseFloat(blurInput.value) * (Math.min(W, H) / 720);
+      const brightnessPct = parseFloat(brightInput.value);
+      bgCacheCtx.filter = `blur(${blurPx}px) brightness(${brightnessPct}%)`;
+
+      if (hasBg) {
+        const pad = 40 * (Math.min(W, H) / 720);
+        drawImageCover(bgCacheCtx, bgImg, -pad, -pad, W + pad * 2, H + pad * 2);
+      } else {
+        const grad = bgCacheCtx.createLinearGradient(0, 0, W, H);
+        grad.addColorStop(0, "#4a443f");
+        grad.addColorStop(0.5, "#2b2a29");
+        grad.addColorStop(1, "#18181a");
+        bgCacheCtx.fillStyle = grad;
+        bgCacheCtx.fillRect(0, 0, W, H);
+      }
+
+      bgCacheCtx.restore();
+      bgDirty = false;
+    }
+
+    // Helper gambar teks marquee mulus
+    function drawMarqueeText(ctx, text, x, y, maxW, dt, speedPxPerSec, alignWhenShort) {
+      const textWidth = ctx.measureText(text).width;
+      if (textWidth > maxW) {
+        const gap = Math.round(maxW * 0.22);
+        const loopWidth = textWidth + gap;
+        if (!audioPlayer.paused) {
+          marqueeOffset += speedPxPerSec * dt;
+          if (marqueeOffset >= loopWidth) {
+            marqueeOffset -= loopWidth;
+          }
+        }
+        const drawX1 = Math.round(x - marqueeOffset);
+        const drawX2 = Math.round(x - marqueeOffset + loopWidth);
+        ctx.textAlign = "left";
+        ctx.fillText(text, drawX1, y);
+        ctx.fillText(text, drawX2, y);
+      } else {
+        marqueeOffset = 0;
+        ctx.textAlign = alignWhenShort || "left";
+        ctx.fillText(text, Math.round(x), y);
+      }
+    }
+
     // =========================================================================
     // RENDER LAYOUT PORTRAIT (9:16)
     // =========================================================================
     function renderPortrait(W, H, dt) {
       const S = W / 720;
 
-      // Kartu Utama
       const cardW = 556 * S;
       const cardH = 975 * S;
       const cardX = (W - cardW) / 2;
@@ -492,7 +553,6 @@
       ctx.stroke();
       ctx.restore();
 
-      // Cover Artwork
       const covMargin = 34 * S;
       const covX = cardX + covMargin;
       const covY = cardY + covMargin;
@@ -514,7 +574,6 @@
       }
       ctx.restore();
 
-      // Judul Lagu (Marquee)
       const infoY = covY + covSize + 48 * S;
       const titleAreaX = covX;
       const titleAreaW = covSize - 68 * S;
@@ -522,32 +581,14 @@
 
       ctx.save();
       ctx.font = `700 ${24 * S}px -apple-system, BlinkMacSystemFont, sans-serif`;
-      const textWidth = ctx.measureText(titleText).width;
-
       ctx.beginPath();
       ctx.rect(titleAreaX, infoY - 28 * S, titleAreaW, 38 * S);
       ctx.clip();
-
       ctx.fillStyle = "#ffffff";
-      ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
-
-      if (textWidth > titleAreaW) {
-        const gap = 55 * S;
-        const loopWidth = textWidth + gap;
-        if (!audioPlayer.paused) {
-          marqueeOffset += 48 * S * dt;
-          if (marqueeOffset >= loopWidth) marqueeOffset -= loopWidth;
-        }
-        ctx.fillText(titleText, titleAreaX - marqueeOffset, infoY);
-        ctx.fillText(titleText, titleAreaX - marqueeOffset + loopWidth, infoY);
-      } else {
-        marqueeOffset = 0;
-        ctx.fillText(titleText, titleAreaX, infoY);
-      }
+      drawMarqueeText(ctx, titleText, titleAreaX, infoY, titleAreaW, dt, 64 * S, "left");
       ctx.restore();
 
-      // Nama Artis (Italic)
       const artistY = infoY + 32 * S;
       const artistText = artistInput.value.trim() || "Nama Artis";
 
@@ -561,10 +602,8 @@
       ctx.fillText(artistText, titleAreaX, artistY);
       ctx.restore();
 
-      // Spectrum (Lingkaran Kuning)
       drawSpectrumBars(ctx, covX + covSize - 24 * S, infoY + 4 * S, S);
 
-      // Progress Bar & Durasi
       const progY = artistY + 68 * S;
       const progX = covX;
       const progW = covSize;
@@ -593,7 +632,6 @@
       const remaining = Math.max(0, duration - currentTime);
       ctx.fillText("-" + formatTime(remaining), progX + progW, timeY);
 
-      // Kontrol Ikon
       const ctrlY = timeY + 58 * S;
       const centerX = cardX + cardW / 2;
 
@@ -611,7 +649,6 @@
 
       drawDoubleTriangle(ctx, centerX + 96 * S, ctrlY, 18 * S, 1, "#ffffff");
 
-      // Volume Slider
       const volY = ctrlY + 68 * S;
       drawSpeakerIcon(ctx, progX + 8 * S, volY, S, false);
 
@@ -629,7 +666,6 @@
 
       drawSpeakerIcon(ctx, progX + progW - 28 * S, volY, S, true);
 
-      // Pil Output Device ("iPhone")
       const pillW = 172 * S;
       const pillH = 44 * S;
       const pillX = centerX - pillW / 2;
@@ -655,7 +691,6 @@
     function renderLandscape(W, H, dt) {
       const S = H / 720;
 
-      // 1. Kartu Utama Landscape (Dark iOS Glass Card di Tengah Layar)
       const cardW = 1070 * S;
       const cardH = 540 * S;
       const cardX = (W - cardW) / 2;
@@ -671,7 +706,6 @@
       ctx.stroke();
       ctx.restore();
 
-      // 2. Cover Artwork di Sisi Kiri Kartu
       const covMargin = 34 * S;
       const covSize = cardH - covMargin * 2;
       const covX = cardX + covMargin;
@@ -693,45 +727,24 @@
       }
       ctx.restore();
 
-      // 3. Area Kontrol Sisi Kanan Kartu
       const rightX = covX + covSize + 36 * S;
       const rightW = cardX + cardW - 38 * S - rightX;
       const rightCenterX = rightX + rightW / 2;
 
-      // A. Judul Lagu di bagian atas kanan
       const titleY = cardY + 62 * S;
       const titleText = titleInput.value.trim() || "Judul Musik";
       const titleBoxW = rightW - 20 * S;
 
       ctx.save();
       ctx.font = `600 ${23 * S}px -apple-system, BlinkMacSystemFont, sans-serif`;
-      const textWidth = ctx.measureText(titleText).width;
-
       ctx.beginPath();
       ctx.rect(rightX + 10 * S, titleY - 26 * S, titleBoxW, 36 * S);
       ctx.clip();
-
       ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
       ctx.textBaseline = "alphabetic";
-
-      if (textWidth > titleBoxW) {
-        const gap = 55 * S;
-        const loopWidth = textWidth + gap;
-        if (!audioPlayer.paused) {
-          marqueeOffset += 48 * S * dt;
-          if (marqueeOffset >= loopWidth) marqueeOffset -= loopWidth;
-        }
-        ctx.textAlign = "left";
-        ctx.fillText(titleText, rightX + 10 * S - marqueeOffset, titleY);
-        ctx.fillText(titleText, rightX + 10 * S - marqueeOffset + loopWidth, titleY);
-      } else {
-        marqueeOffset = 0;
-        ctx.textAlign = "center";
-        ctx.fillText(titleText, rightCenterX, titleY);
-      }
+      drawMarqueeText(ctx, titleText, rightX + 10 * S, titleY, titleBoxW, dt, 64 * S, "center");
       ctx.restore();
 
-      // B. Nama Artis (Font Miring / Italic, di bawah judul)
       const artistY = titleY + 34 * S;
       const artistText = artistInput.value.trim() || "Nama Artis";
 
@@ -745,7 +758,6 @@
       ctx.fillText(artistText, rightCenterX, artistY);
       ctx.restore();
 
-      // C. Tombol Lingkaran AirPlay di Posisi Lingkaran Kuning (Kiri Atas Area Kontrol)
       const badgeR = 22 * S;
       const badgeX = rightX + badgeR + 4 * S;
       const badgeY = artistY + 12 * S;
@@ -758,10 +770,8 @@
       drawAirplayWaveIcon(ctx, badgeX, badgeY - 1 * S, S * 0.95);
       ctx.restore();
 
-      // Spectrum di sebelah kanan atas area kontrol
       drawSpectrumBars(ctx, rightX + rightW - 32 * S, badgeY, S * 0.95);
 
-      // D. Blok Lingkaran Hijau (Diturunkan sedikit agar pas tengah atas-bawah)
       const progY = artistY + 86 * S;
       const progX = rightX;
       const progW = rightW;
@@ -771,18 +781,15 @@
       const duration = isFinite(audioPlayer.duration) && audioPlayer.duration > 0 ? audioPlayer.duration : 40;
       const progressRatio = Math.min(1, Math.max(0, currentTime / duration));
 
-      // Track abu-abu
       ctx.fillStyle = "rgba(255, 255, 255, 0.22)";
       roundRect(ctx, progX, progY, progW, progH, progH / 2);
       ctx.fill();
 
-      // Track putih aktif
       const activeW = Math.max(progH, progW * progressRatio);
       ctx.fillStyle = "#ffffff";
       roundRect(ctx, progX, progY, activeW, progH, progH / 2);
       ctx.fill();
 
-      // Teks Waktu di bawah Progress Bar
       const timeY = progY + 26 * S;
       ctx.font = `600 ${15 * S}px -apple-system, BlinkMacSystemFont, sans-serif`;
       ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
@@ -793,7 +800,6 @@
       const remaining = Math.max(0, duration - currentTime);
       ctx.fillText("-" + formatTime(remaining), progX + progW, timeY);
 
-      // E. Ikon Kontrol Pemutar (Rewind <<, Pause ||, Forward >>)
       const ctrlY = timeY + 66 * S;
 
       drawDoubleTriangle(ctx, rightCenterX - 115 * S, ctrlY, 19 * S, -1, "#ffffff");
@@ -809,7 +815,6 @@
 
       drawDoubleTriangle(ctx, rightCenterX + 115 * S, ctrlY, 19 * S, 1, "#ffffff");
 
-      // F. Volume Slider Bar & Ikon Speaker Kiri-Kanan
       const volY = ctrlY + 72 * S;
       drawSpeakerIcon(ctx, progX + 4 * S, volY, S, false);
 
@@ -833,7 +838,6 @@
 
       drawSpeakerIcon(ctx, progX + progW - 26 * S, volY, S, true);
 
-      // G. Garis Home Indicator Putih di Bagian Bawah Kanan
       const homeW = 175 * S;
       const homeH = 6 * S;
       const homeX = rightCenterX - homeW / 2;
@@ -849,35 +853,21 @@
     // =========================================================================
     function renderFrame(timestamp) {
       if (!lastTimestamp) lastTimestamp = timestamp;
-      const dt = (timestamp - lastTimestamp) / 1000;
+      // Batasi dt maksimal 0.05 detik (50ms) agar gerakan teks tidak meloncat saat lag
+      const dt = Math.min((timestamp - lastTimestamp) / 1000, 0.05);
       lastTimestamp = timestamp;
 
       const W = canvas.width;
       const H = canvas.height;
       const isLandscape = orientationSelect.value === "landscape";
 
-      ctx.clearRect(0, 0, W, H);
-
-      // 1. LAYER BACKGROUND + BLUR & BRIGHTNESS
-      ctx.save();
-      const blurPx = parseFloat(blurInput.value) * (Math.min(W, H) / 720);
-      const brightnessPct = parseFloat(brightInput.value);
-      ctx.filter = `blur(${blurPx}px) brightness(${brightnessPct}%)`;
-
-      if (hasBg) {
-        const pad = 40 * (Math.min(W, H) / 720);
-        drawImageCover(ctx, bgImg, -pad, -pad, W + pad * 2, H + pad * 2);
-      } else {
-        const grad = ctx.createLinearGradient(0, 0, W, H);
-        grad.addColorStop(0, "#4a443f");
-        grad.addColorStop(0.5, "#2b2a29");
-        grad.addColorStop(1, "#18181a");
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, W, H);
+      if (bgDirty || bgCacheCanvas.width !== W || bgCacheCanvas.height !== H) {
+        rebuildBackgroundCache(W, H);
       }
-      ctx.restore();
 
-      // 2. RENDER LAYOUT SESUAI ORIENTASI
+      ctx.clearRect(0, 0, W, H);
+      ctx.drawImage(bgCacheCanvas, 0, 0);
+
       if (isLandscape) {
         renderLandscape(W, H, dt);
       } else {
@@ -887,7 +877,6 @@
       requestAnimationFrame(renderFrame);
     }
 
-    // Fungsi Gambar Spectrum Audio
     function drawSpectrumBars(ctx, centerX, centerY, S) {
       const barCount = 6;
       const barWidth = 3.2 * S;
@@ -917,7 +906,6 @@
       }
     }
 
-    // Fungsi Gambar Bintang Outline
     function drawStarOutline(ctx, cx, cy, spikes, outerR, innerR, color, lineW) {
       let rot = (Math.PI / 2) * 3;
       let x = cx;
@@ -946,7 +934,6 @@
       ctx.restore();
     }
 
-    // Fungsi Gambar Rewind / Forward
     function drawDoubleTriangle(ctx, cx, cy, size, dir, color) {
       ctx.save();
       ctx.fillStyle = color;
@@ -968,7 +955,6 @@
       ctx.restore();
     }
 
-    // Fungsi Gambar Speaker
     function drawSpeakerIcon(ctx, x, y, S, withWaves) {
       ctx.save();
       ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
@@ -996,7 +982,6 @@
       ctx.restore();
     }
 
-    // Fungsi Gambar Ikon iPhone AirPlay
     function drawAirplayWaveIcon(ctx, cx, cy, S) {
       ctx.save();
       ctx.strokeStyle = "rgba(255,255,255,0.85)";
@@ -1086,6 +1071,7 @@
 
       audioPlayer.currentTime = 0;
       marqueeOffset = 0;
+      lastTimestamp = performance.now();
       audioPlayer.play();
       mediaRecorder.start();
       isRecording = true;
